@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Simple Chat Client</title>
+  <style>
+    body { font-family: sans-serif; max-width: 400px; margin: 2rem auto; text-align: center; }
+    #messages { border: 1px solid #ccc; height: 250px; overflow-y: auto; margin-bottom: 10px; padding: 5px; text-align: left; }
+    input { width: 70%; padding: 8px; }
+    button { padding: 8px 12px; }
+  </style>
+</head>
+<body>
+  <h2>💬 Simple Chat (Socket Programming)</h2>
+  <div id="messages"></div>
+  <input id="msgInput" placeholder="Type message..." />
+  <button onclick="sendMessage()">Send</button>
+
+  <script src="client.js"></script>
+</body>
+</html>
