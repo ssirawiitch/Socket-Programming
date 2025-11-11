@@ -2,19 +2,33 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Simple Chat Client</title>
+  <title>Chat Room (User List)</title>
   <style>
-    body { font-family: sans-serif; max-width: 400px; margin: 2rem auto; text-align: center; }
-    #messages { border: 1px solid #ccc; height: 250px; overflow-y: auto; margin-bottom: 10px; padding: 5px; text-align: left; }
-    input { width: 70%; padding: 8px; }
+    body { font-family: sans-serif; max-width: 600px; margin: 2rem auto; text-align: center; display: flex; flex-direction: column; align-items: center; }
+    #chatContainer { display: flex; width: 100%; max-width: 600px; gap: 10px; }
+    #userList { border: 1px solid #ccc; width: 150px; height: 250px; overflow-y: auto; padding: 5px; }
+    #messages { border: 1px solid #ccc; flex: 1; height: 250px; overflow-y: auto; padding: 5px; text-align: left; }
+    input { padding: 8px; width: 70%; }
     button { padding: 8px 12px; }
+    #chatArea { display: none; }
   </style>
 </head>
 <body>
-  <h2>💬 Simple Chat (Socket Programming)</h2>
-  <div id="messages"></div>
-  <input id="msgInput" placeholder="Type message..." />
-  <button onclick="sendMessage()">Send</button>
+  <h2>💬 Chat Room</h2>
+
+  <div id="loginArea">
+    <input id="usernameInput" placeholder="Enter your name..." />
+    <button onclick="joinChat()">Join Chat</button>
+  </div>
+
+  <div id="chatArea">
+    <div id="chatContainer">
+      <div id="userList"><strong>Online Users</strong><hr /></div>
+      <div id="messages"></div>
+    </div>
+    <input id="msgInput" placeholder="Type message..." />
+    <button onclick="sendMessage()">Send</button>
+  </div>
 
   <script src="client.js"></script>
 </body>
