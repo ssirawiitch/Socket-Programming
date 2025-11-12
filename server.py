@@ -1,63 +1,80 @@
 import asyncio
 import websockets
-import json  # ✅ ใช้สำหรับส่งข้อมูล list เป็น JSON
+import json
 
-connected_users = {}  # websocket -> username
+connected_users = {}       # websocket -> username
+chat_rooms = {"global": set()}  # room_name -> set(websocket)
+
+async def broadcast_to_room(room_name, data):
+    """ส่งข้อความถึงทุกคนในห้อง"""
+    for ws in chat_rooms.get(room_name, set()):
+        try:
+            await ws.send(json.dumps(data))
+        except:
+            pass
 
 async def send_user_list():
-    """ส่งรายชื่อผู้ใช้งานทั้งหมดให้ทุก client"""
-    user_list = list(connected_users.values())
-    data = json.dumps({"type": "user_list", "users": user_list})
-    for client in connected_users:
-        await client.send(data)
+    """อัปเดตชื่อผู้ใช้ทั้งหมด"""
+    users = list(connected_users.values())
+    msg = json.dumps({"type": "user_list", "users": users})
+    for ws in connected_users:
+        await ws.send(msg)
 
 async def handle_client(websocket):
     try:
+        # รับ username
         username = await websocket.recv()
-        print(f"🔌 New connection request from username: {username}")
-
         if username in connected_users.values():
-            await websocket.send("❌ Username already exists. Please refresh and try again.")
+            await websocket.send(json.dumps({"type": "error", "message": "Username already exists"}))
             await websocket.close()
             return
 
         connected_users[websocket] = username
-        print(f"✅ {username} joined the chat. Total users: {len(connected_users)}")
+        chat_rooms["global"].add(websocket)
+        print(f"✅ {username} connected")
 
-        # แจ้งทุกคนในห้องว่ามีคน join
-        for client in connected_users:
-            await client.send(f"📢 {username} has joined the chat!")
-
-        # ✅ ส่งรายชื่อปัจจุบันให้ทุกคน
         await send_user_list()
+        await broadcast_to_room("global", {"type": "system", "message": f"👋 {username} joined the global chat"})
 
-        # รับข้อความปกติ
-        async for message in websocket:
+        # วนรับข้อความจาก client
+        while True:
+            data = await websocket.recv()
+            msg = json.loads(data)
             sender = connected_users[websocket]
-            print(f"💬 {sender}: {message}")
-            for client in connected_users:
-                if client != websocket:
-                    await client.send(f"{sender}: {message}")
 
-    except websockets.ConnectionClosed:
+            msg_type = msg.get("type")
+            text = msg.get("message")
+
+            if msg_type == "global":
+                await broadcast_to_room("global", {"type": "chat", "room": "global", "sender": sender, "message": text})
+
+            elif msg_type == "private":
+                target = msg.get("target")
+                room_name = "_".join(sorted([sender, target]))
+                chat_rooms.setdefault(room_name, set()).update([
+                    ws for ws, name in connected_users.items() if name in [sender, target]
+                ])
+                await broadcast_to_room(room_name, {"type": "chat", "room": room_name, "sender": sender, "message": text})
+
+            elif msg_type == "group":
+                room = msg.get("room")
+                chat_rooms.setdefault(room, set()).add(websocket)
+                await broadcast_to_room(room, {"type": "chat", "room": room, "sender": sender, "message": text})
+
+    except websockets.exceptions.ConnectionClosed:
         pass
     finally:
-        # เมื่อ client หลุด
         if websocket in connected_users:
-            name = connected_users.pop(websocket)
-            print(f"❌ {name} disconnected.")
-            for client in connected_users:
-                await client.send(f"🚪 {name} has left the chat.")
-            # ✅ ส่งรายชื่อใหม่หลังจากออก
+            user = connected_users.pop(websocket)
+            print(f"❌ {user} disconnected")
+            for members in chat_rooms.values():
+                members.discard(websocket)
             await send_user_list()
+            await broadcast_to_room("global", {"type": "system", "message": f"❌ {user} left the chat"})
 
 async def main():
-    try:
-        async with websockets.serve(handle_client, "0.0.0.0", 5000):
-            print("🚀 Server started on ws://localhost:5000")
-            await asyncio.Future()
-    except KeyboardInterrupt:
-        print("\n🛑 Server stopped manually. Bye!")
+    async with websockets.serve(handle_client, "0.0.0.0", 6789):
+        print("🚀 Server running on ws://localhost:6789")
+        await asyncio.Future()
 
-if __name__ == "__main__":
-    asyncio.run(main())
+asyncio.run(main())

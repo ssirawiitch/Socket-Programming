@@ -1,89 +1,102 @@
-let ws;
-let username;
-const messagesDiv = document.getElementById("messages");
-const input = document.getElementById("msgInput");
-const loginArea = document.getElementById("loginArea");
-const chatArea = document.getElementById("chatArea");
-const usernameInput = document.getElementById("usernameInput");
-const userListDiv = document.getElementById("userList");
+let socket;
+let username = "";
+let currentMode = "global";
+let targetUser = "";
+let currentGroup = "";
 
-function joinChat() {
-  username = usernameInput.value.trim();
-  if (!username) {
-    alert("Please enter your name");
-    return;
-  }
+function connect() {
+  username = document.getElementById("username").value.trim();
+  if (!username) return alert("Please enter your name!");
 
-  ws = new WebSocket("ws://localhost:5000");
+  socket = new WebSocket("ws://localhost:6789");
+  socket.onopen = () => socket.send(username);
 
-  ws.onopen = () => {
-    ws.send(username); // ส่งชื่อให้ server
-  };
+  socket.onmessage = (event) => {
+    const data = JSON.parse(event.data);
 
-  ws.onmessage = (event) => {
-    const msgText = event.data;
-
-    // ✅ ตรวจว่าข้อมูลที่ได้เป็น JSON หรือข้อความปกติ
-    try {
-      const data = JSON.parse(msgText);
-      if (data.type === "user_list") {
-        updateUserList(data.users);
-        return;
-      }
-    } catch {
-      // ถ้า parse ไม่ได้ แปลว่าเป็นข้อความแชทธรรมดา
-    }
-
-    // ตรวจ username ซ้ำ
-    if (msgText.startsWith("❌ Username already exists")) {
-      alert("This username is already taken. Please choose another name.");
-      ws.close();
-      chatArea.style.display = "none";
-      loginArea.style.display = "block";
-      usernameInput.value = "";
-      messagesDiv.innerHTML = "";
+    if (data.type === "error") {
+      alert(data.message);
+      socket.close();
       return;
     }
 
-    // แสดงพื้นที่แชทหลังเชื่อมต่อสำเร็จ
-    if (loginArea.style.display !== "none") {
-      loginArea.style.display = "none";
-      chatArea.style.display = "block";
+    if (data.type === "user_list") {
+      updateUserList(data.users);
+      return;
     }
 
-    // เพิ่มข้อความในห้องแชท
-    const msg = document.createElement("div");
-    msg.textContent = msgText;
-    messagesDiv.appendChild(msg);
-    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    if (data.type === "system") {
+      addMessage(data.message, "system");
+      return;
+    }
+
+    if (data.type === "chat") {
+      const mine = data.sender === username;
+      addMessage(`${mine ? "You" : data.sender}: ${data.message}`, mine ? "mine" : "other");
+    }
   };
 
-  ws.onclose = () => {
-    const msg = document.createElement("div");
-    msg.textContent = "❌ Disconnected from server";
-    msg.style.color = "red";
-    messagesDiv.appendChild(msg);
-  };
+  socket.onclose = () => addMessage("Disconnected", "system");
+
+  // show chat UI
+  document.getElementById("login-screen").style.display = "none";
+  document.getElementById("chat-screen").style.display = "flex";
+}
+
+function updateUserList(users) {
+  const list = document.getElementById("user-list");
+  list.innerHTML = "";
+  users.forEach((u) => {
+    if (u === username) return;
+    const div = document.createElement("div");
+    div.className = "user-item";
+    div.textContent = u;
+    div.onclick = () => openPrivateChat(u);
+    list.appendChild(div);
+  });
+}
+
+function openPrivateChat(u) {
+  currentMode = "private";
+  targetUser = u;
+  document.getElementById("chat-header").textContent = `👤 Chat with ${u}`;
+  addMessage(`Now chatting privately with ${u}`, "system");
+}
+
+function switchMode(mode) {
+  currentMode = mode;
+  targetUser = "";
+  document.getElementById("group-name").style.display = mode === "group" ? "block" : "none";
+  document.getElementById("chat-header").textContent =
+    mode === "global" ? "🌍 Global Chat" : "👥 Group Chat";
 }
 
 function sendMessage() {
-  const text = input.value.trim();
-  if (text && ws.readyState === WebSocket.OPEN) {
-    ws.send(text);
-    const msg = document.createElement("div");
-    msg.textContent = `🧍‍♂️ You: ${text}`;
-    msg.style.fontWeight = "bold";
-    messagesDiv.appendChild(msg);
-    input.value = "";
+  const text = document.getElementById("message").value.trim();
+  if (!text) return;
+
+  let payload = { type: currentMode, message: text };
+
+  if (currentMode === "private") {
+    if (!targetUser) return alert("Select a user to chat privately");
+    payload.target = targetUser;
   }
+
+  if (currentMode === "group") {
+    const groupName = document.getElementById("group-name").value.trim();
+    payload.room = groupName || "default_group";
+    document.getElementById("chat-header").textContent = `👥 Group: ${payload.room}`;
+  }
+
+  socket.send(JSON.stringify(payload));
+  document.getElementById("message").value = "";
 }
 
-// ✅ ฟังก์ชันอัปเดตรายชื่อผู้ใช้งาน
-function updateUserList(users) {
-  userListDiv.innerHTML = "<strong>Online Users</strong><hr />";
-  users.forEach((u) => {
-    const userDiv = document.createElement("div");
-    userDiv.textContent = (u === username ? `⭐ ${u}` : u);
-    userListDiv.appendChild(userDiv);
-  });
+function addMessage(text, cls) {
+  const msgBox = document.getElementById("messages");
+  const div = document.createElement("div");
+  div.className = `message ${cls}`;
+  div.textContent = text;
+  msgBox.appendChild(div);
+  msgBox.scrollTop = msgBox.scrollHeight;
 }
