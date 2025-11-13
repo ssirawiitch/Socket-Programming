@@ -17,9 +17,11 @@ function connect() {
   if (!username) return alert("Please enter your name!");
   if (!avatar) return alert("Please select an avatar!");
 
-  socket = new WebSocket("wss://socket-programming-2.onrender.com/ws");
   //socket = new WebSocket("ws://localhost:8080/ws");
-
+  const socketURL = location.hostname === "localhost"
+  ? "ws://localhost:8080/ws"
+  : "wss://socket-programming-2.onrender.com/ws";
+  socket = new WebSocket(socketURL);
 
   socket.onopen = () => {
     socket.send(JSON.stringify({
