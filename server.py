@@ -6,6 +6,19 @@ connected_users = {}
 chat_rooms = {"global": set()}
 
 # -----------------------
+# Send user list to all clients
+# -----------------------
+async def send_user_list():
+    users = list(connected_users.values())
+    payload = json.dumps({"type": "user_list", "users": users})
+
+    for ws in connected_users:
+        try:
+            await ws.send_str(payload)
+        except:
+            pass
+
+# -----------------------
 # WebSocket Handler
 # -----------------------
 async def websocket_handler(request):
@@ -19,9 +32,12 @@ async def websocket_handler(request):
         await ws.close()
         return ws
 
+    # Register user
     connected_users[ws] = username
     chat_rooms["global"].add(ws)
 
+    # Notify everyone
+    await send_user_list()
     await broadcast("global", {"type": "system", "message": f"👋 {username} joined"})
 
     try:
@@ -30,42 +46,53 @@ async def websocket_handler(request):
                 data = json.loads(msg.data)
                 msg_type = data.get("type")
                 text = data.get("message")
-
                 sender = connected_users[ws]
 
-                # Global
+                # Global Chat
                 if msg_type == "global":
                     await broadcast("global", {"type": "chat", "sender": sender, "room": "global", "message": text})
 
-                # Private
+                # Private Chat
                 elif msg_type == "private":
                     target = data["target"]
                     room = "_".join(sorted([sender, target]))
                     chat_rooms.setdefault(room, set())
+
                     for w, name in connected_users.items():
                         if name in [sender, target]:
                             chat_rooms[room].add(w)
+
                     await broadcast(room, {"type": "chat", "sender": sender, "room": room, "message": text})
 
-                # Group
+                # Group Chat
                 elif msg_type == "group":
                     room = data["room"]
                     chat_rooms.setdefault(room, set()).add(ws)
+
                     await broadcast(room, {"type": "chat", "sender": sender, "room": room, "message": text})
 
     except:
         pass
 
     finally:
-        # cleanup
+        # Cleanup on disconnect
         username = connected_users.pop(ws, None)
+
+        # Remove from all rooms
         for members in chat_rooms.values():
             members.discard(ws)
+
+        # Notify everyone
         if username:
+            await send_user_list()
             await broadcast("global", {"type": "system", "message": f"❌ {username} left"})
+
         return ws
 
 
+# -----------------------
+# Broadcast helper
+# -----------------------
 async def broadcast(room, data):
     remove = []
     for ws in chat_rooms.get(room, []):
@@ -80,7 +107,6 @@ async def broadcast(room, data):
 # -----------------------
 # HTTP server (serve client.html)
 # -----------------------
-
 async def index(request):
     return web.FileResponse("client.html")
 
@@ -91,7 +117,6 @@ async def js_file(request):
 # -----------------------
 # Create App
 # -----------------------
-
 app = web.Application()
 app.router.add_get("/", index)
 app.router.add_get("/client.js", js_file)
