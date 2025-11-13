@@ -8,7 +8,7 @@ function connect() {
   username = document.getElementById("username").value.trim();
   if (!username) return alert("Please enter your name!");
 
-  socket = new WebSocket("wss://https://socket-programming-2.onrender.com/");
+  socket = new WebSocket("wss://socket-programming-2.onrender.com/ws");
   socket.onopen = () => socket.send(username);
 
   socket.onmessage = (event) => {
