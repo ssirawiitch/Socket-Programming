@@ -115,7 +115,7 @@ async def websocket_handler(request):
                 "message": f"❌ {user_info['name']} left"
             })
 
-        return ws
+    return ws
 
 # -----------------------
 # Broadcast
