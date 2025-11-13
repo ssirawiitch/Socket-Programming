@@ -154,6 +154,20 @@
     border-radius: 6px;
     margin: 10px;
   }
+  .avatar-option {
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    border: 3px solid transparent;
+    cursor: pointer;
+    transition: 0.2s;
+  }
+  .avatar-option:hover {
+    transform: scale(1.1);
+  }
+  .avatar-selected {
+    border-color: yellow;
+  }
 </style>
 </head>
 <body>
@@ -162,6 +176,16 @@
 <div id="login-screen">
   <h1>💬 LINE Chat Clone</h1>
   <input id="username" placeholder="Enter your name">
+  <div style="margin-top: 15px;">
+    <h3>Select your avatar:</h3>
+    <div id="avatar-select" style="display:flex; gap:10px; flex-wrap:wrap; justify-content:center;">
+        <img src="avatar1.jpg" class="avatar-option" onclick="selectAvatar('avatar1.jpg')">
+        <img src="avatar2.jpg" class="avatar-option" onclick="selectAvatar('avatar2.jpg')">
+        <img src="avatar3.jpg" class="avatar-option" onclick="selectAvatar('avatar3.jpg')">
+        <img src="avatar4.jpg" class="avatar-option" onclick="selectAvatar('avatar4.jpg')">
+    </div>
+  </div>
+
   <button onclick="connect()">Enter Chat</button>
 </div>
 
