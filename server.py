@@ -1,98 +1,101 @@
-import asyncio
-import websockets
+from aiohttp import web
 import json
 import os
-import http.server
-import socketserver
-import threading
-
-# -----------------------------
-# HTTP SERVER (serve client.html)
-# -----------------------------
-
-PORT = int(os.environ.get("PORT", 10000))   # Render sets $PORT dynamically
-
-class Handler(http.server.SimpleHTTPRequestHandler):
-    def log_message(self, *args):
-        return  # hide http logs
-
-def start_http_server():
-    with socketserver.TCPServer(("", PORT), Handler) as httpd:
-        print(f"🌐 HTTP server serving on port {PORT}")
-        httpd.serve_forever()
-
-# Start HTTP server on separate thread
-threading.Thread(target=start_http_server, daemon=True).start()
-
-
-# -----------------------------
-# WEBSOCKET SERVER
-# -----------------------------
 
 connected_users = {}
 chat_rooms = {"global": set()}
 
-async def broadcast(room, data):
-    for ws in chat_rooms.get(room, []):
-        try:
-            await ws.send(json.dumps(data))
-        except:
-            pass
+# -----------------------
+# WebSocket Handler
+# -----------------------
+async def websocket_handler(request):
+    ws = web.WebSocketResponse()
+    await ws.prepare(request)
 
-async def handle_client(websocket):
+    # Receive username
+    username = await ws.receive_str()
+    if username in connected_users.values():
+        await ws.send_str(json.dumps({"type": "error", "message": "Username already exists"}))
+        await ws.close()
+        return ws
+
+    connected_users[ws] = username
+    chat_rooms["global"].add(ws)
+
+    await broadcast("global", {"type": "system", "message": f"👋 {username} joined"})
+
     try:
-        username = await websocket.recv()
+        async for msg in ws:
+            if msg.type == web.WSMsgType.TEXT:
+                data = json.loads(msg.data)
+                msg_type = data.get("type")
+                text = data.get("message")
 
-        if username in connected_users.values():
-            await websocket.send(json.dumps({"type": "error", "message": "Username already exists"}))
-            await websocket.close()
-            return
+                sender = connected_users[ws]
 
-        connected_users[websocket] = username
-        chat_rooms["global"].add(websocket)
+                # Global
+                if msg_type == "global":
+                    await broadcast("global", {"type": "chat", "sender": sender, "room": "global", "message": text})
 
-        await broadcast("global", {"type": "system", "message": f"👋 {username} joined"})
-        
-        while True:
-            msg = json.loads(await websocket.recv())
-            mtype = msg.get("type")
-            text = msg.get("message")
+                # Private
+                elif msg_type == "private":
+                    target = data["target"]
+                    room = "_".join(sorted([sender, target]))
+                    chat_rooms.setdefault(room, set())
+                    for w, name in connected_users.items():
+                        if name in [sender, target]:
+                            chat_rooms[room].add(w)
+                    await broadcast(room, {"type": "chat", "sender": sender, "room": room, "message": text})
 
-            sender = connected_users[websocket]
-
-            # Global
-            if mtype == "global":
-                await broadcast("global", {"type": "chat", "sender": sender, "room": "global", "message": text})
-
-            # Private
-            elif mtype == "private":
-                target = msg["target"]
-                room = "_".join(sorted([sender, target]))
-                chat_rooms.setdefault(room, set())
-
-                for ws, nm in connected_users.items():
-                    if nm in [sender, target]:
-                        chat_rooms[room].add(ws)
-
-                await broadcast(room, {"type": "chat", "room": room, "sender": sender, "message": text})
-
-            # Group
-            elif mtype == "group":
-                room = msg["room"]
-                chat_rooms.setdefault(room, set()).add(websocket)
-                await broadcast(room, {"type": "chat", "room": room, "sender": sender, "message": text})
+                # Group
+                elif msg_type == "group":
+                    room = data["room"]
+                    chat_rooms.setdefault(room, set()).add(ws)
+                    await broadcast(room, {"type": "chat", "sender": sender, "room": room, "message": text})
 
     except:
         pass
 
-async def main():
-    async with websockets.serve(
-        handle_client,
-        "0.0.0.0",
-        PORT,
-        ping_interval=None,
-    ):
-        print(f"🔌 WebSocket server running on port {PORT}")
-        await asyncio.Future()
+    finally:
+        # cleanup
+        username = connected_users.pop(ws, None)
+        for members in chat_rooms.values():
+            members.discard(ws)
+        if username:
+            await broadcast("global", {"type": "system", "message": f"❌ {username} left"})
+        return ws
 
-asyncio.run(main())
+
+async def broadcast(room, data):
+    remove = []
+    for ws in chat_rooms.get(room, []):
+        try:
+            await ws.send_str(json.dumps(data))
+        except:
+            remove.append(ws)
+    for ws in remove:
+        chat_rooms[room].discard(ws)
+
+
+# -----------------------
+# HTTP server (serve client.html)
+# -----------------------
+
+async def index(request):
+    return web.FileResponse("client.html")
+
+async def js_file(request):
+    return web.FileResponse("client.js")
+
+
+# -----------------------
+# Create App
+# -----------------------
+
+app = web.Application()
+app.router.add_get("/", index)
+app.router.add_get("/client.js", js_file)
+app.router.add_get("/ws", websocket_handler)
+
+PORT = int(os.environ.get("PORT", 8080))
+web.run_app(app, host="0.0.0.0", port=PORT)
