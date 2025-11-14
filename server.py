@@ -3,13 +3,15 @@ import json
 import os
 
 connected_users = {}
-chat_rooms = {"global": set()}
+chat_rooms = {"global": set()}   # room_name -> set of ws
+group_names = set(["global"])    # only rooms in this set are real groups shown to clients
+
 
 # -----------------------
 # Send user list
 # -----------------------
 async def send_user_list():
-    users = [info["name"] for info in connected_users.values()]
+    users = [{"name": info["name"], "avatar": info["avatar"]} for info in connected_users.values()]
     payload = json.dumps({"type": "user_list", "users": users})
 
     for ws in list(connected_users.keys()):
@@ -17,6 +19,35 @@ async def send_user_list():
             await ws.send_str(payload)
         except:
             pass
+
+# -----------------------
+# Send group list
+# -----------------------
+async def send_group_list():
+    """Broadcast the list of groups (only real groups) and their member names to all clients.
+
+    We intentionally only use `group_names` as the authoritative source of groups.
+    As a defensive measure, skip any name that looks like a private-room (contains '_'
+    and both sides look like usernames) unless you intentionally named a group with '_'.
+    """
+    groups = []
+    for room in sorted(group_names):
+        # Defensive: skip any room that looks like a private one-to-one room.
+        # This is optional if you allow underscores in real group names — remove if needed.
+
+        members = chat_rooms.get(room, set())
+        member_names = [connected_users[m]["name"] for m in members if m in connected_users]
+        groups.append({"name": room, "members": member_names, "kind": "group"})
+
+    payload = json.dumps({"type": "group_list", "groups": groups})
+    for ws in list(connected_users.keys()):
+        try:
+            await ws.send_str(payload)
+        except Exception:
+            pass
+
+
+
 
 # -----------------------
 # WebSocket Handler
@@ -42,6 +73,7 @@ async def websocket_handler(request):
 
     # อัพเดทรายชื่อ + ส่งข้อความ system
     await send_user_list()
+    await send_group_list()
     await broadcast("global", {
         "type": "system",
         "message": f"👋 {username} joined"
@@ -85,10 +117,24 @@ async def websocket_handler(request):
                         "message": text
                     })
 
-                # GROUP
+                # GROUP: sending a chat message to a group (must be member)
                 elif msg_type == "group":
-                    room = data["room"]
-                    chat_rooms.setdefault(room, set()).add(ws)
+                    room = data.get("room")
+                    if not room:
+                        continue
+
+                    #Ensure group exists and sender is one of the group member
+                    members = chat_rooms.get(room, set())
+                    if ws not in members:
+                        #notify sender that they must join first
+                        try:
+                            await ws.send_str(json.dumps({
+                                "type": "error",
+                                "message": f"You are not a member of group '{room}'. Join the group to send messages!"
+                            }))
+                        except Exception:
+                            pass
+                        continue
 
                     await broadcast(room, {
                         "type": "chat",
@@ -96,7 +142,89 @@ async def websocket_handler(request):
                         "sender_avatar": avatar_url,
                         "room": room,
                         "message": text
-                    })
+                    })    
+
+                # CREATE GROUP (R8)
+                elif msg_type == "create_group":
+                    room = data.get("room")
+                    if not room:
+                        try:
+                            await ws.send_str(json.dumps({"type": "error", "message": "Group name is required"}))
+                        except Exception:
+                            pass
+                        continue
+
+                    if room in chat_rooms:
+                        try:
+                            await ws.send_str(json.dumps({"type": "error", "message": f"Group '{room}' already exists"}))
+                        except Exception:
+                            pass
+                        continue
+                    if "_" in room:
+                        try:
+                            await ws.send_str(json.dumps({"type": "error", "message": "Group name cannot contain underscore '_'"}))
+                        except Exception:
+                            pass
+                        continue
+
+                    # create group with creator as sole member
+                    chat_rooms[room] = set([ws])
+                    group_names.add(room)
+                    await send_group_list()
+                    try:
+                        await ws.send_str(json.dumps({"type": "system", "message": f"✅ Group '{room}' created"}))
+                    except Exception:
+                        pass
+
+                # JOIN GROUP (R10)
+                elif msg_type == "join_group":
+                    room = data.get("room")
+                    if not room:
+                        continue
+                    if room not in chat_rooms:
+                        try:
+                            await ws.send_str(json.dumps({"type": "error", "message": f"Group '{room}' does not exist"}))
+                        except Exception:
+                            pass
+                        continue
+
+                    chat_rooms[room].add(ws)
+                    await send_group_list()
+                    try:
+                        await ws.send_str(json.dumps({"type": "system", "message": f"✅ Joined group '{room}'"}))
+                    except Exception:
+                        pass
+
+                # optional: leave group
+                elif msg_type == "leave_group":
+                    room = data.get("room")
+                    if not room:
+                        continue
+                    if room in chat_rooms:
+                        chat_rooms[room].discard(ws)
+                        await send_group_list()
+                        try:
+                            await ws.send_str(json.dumps({"type": "system", "message": f"Left group '{room}'"}))
+                        except Exception:
+                            pass
+                # delete group
+                elif msg_type == "delete_group":
+                    room = data.get("room")
+                    if not room:
+                        try:
+                            await ws.send_str(json.dumps({"type": "error", "message": "No Group Selected"}))
+                        except Exception:
+                            pass
+                        continue
+                    #delete this group
+                    del chat_rooms[room]
+                    group_names.discard(room)
+                    await send_group_list()
+                    try:
+                        await ws.send_str(json.dumps({"type": "system", "message": f"✅ Group '{room}' deleted"}))
+                    except Exception:
+                        pass
+
 
     except:
         pass
@@ -107,9 +235,26 @@ async def websocket_handler(request):
 
         for members in chat_rooms.values():
             members.discard(ws)
+        
+        # After: for members in chat_rooms.values(): members.discard(ws)
+
+        # Auto-delete any group that becomes empty
+        empty_groups = []
+        for room in list(chat_rooms.keys()):
+            if room in group_names and room != "global":
+                if len(chat_rooms[room]) == 0:
+                    empty_groups.append(room)
+
+        for room in empty_groups:
+            del chat_rooms[room]
+            group_names.discard(room)
+
+        if empty_groups:
+            await send_group_list()
 
         if user_info:
             await send_user_list()
+            await send_group_list()
             await broadcast("global", {
                 "type": "system",
                 "message": f"❌ {user_info['name']} left"
