@@ -232,7 +232,7 @@ function clearUnreadBadgeForRoom(room) {
 
 
 function selectAvatar(event, src) {
-  avatar = "./images/" + src;
+  avatar = "/images/" + src;
   document.querySelectorAll(".avatar-option")
     .forEach(img => img.classList.remove("avatar-selected"));
   event.target.classList.add("avatar-selected");
