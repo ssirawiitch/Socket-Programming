@@ -291,7 +291,7 @@ app = web.Application()
 app.router.add_static("/images", path=os.path.join(os.path.dirname(__file__), "images"), show_index=False)
 
 # you can also serve client.html & client.js via static if you prefer:
-app.router.add_static("/", path=os.path.join(os.path.dirname(__file__)), show_index=False)
+# app.router.add_static("/", path=os.path.join(os.path.dirname(__file__)), show_index=False)
 # but keep your existing explicit routes if you like
 
 
