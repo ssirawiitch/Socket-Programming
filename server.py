@@ -9,78 +9,50 @@ chat_rooms = {"global": set()}   # room_name -> set of ws
 message_store = {}
 group_names = set(["global"])    # only rooms in this set are real groups shown to clients
 
-
-# -----------------------
-# Send user list
-# -----------------------
 async def send_user_list():
     users = [{"name": info["name"], "avatar": info["avatar"]} for info in connected_users.values()]
     payload = json.dumps({"type": "user_list", "users": users})
-
     for ws in list(connected_users.keys()):
-        try:
-            await ws.send_str(payload)
-        except:
-            pass
+        try: await ws.send_str(payload)
+        except: pass
 
-# -----------------------
-# Send group list
-# -----------------------
 async def send_group_list():
-    """Broadcast the list of groups (only real groups) and their member names to all clients.
-
-    We intentionally only use `group_names` as the authoritative source of groups.
-    As a defensive measure, skip any name that looks like a private-room (contains '_'
-    and both sides look like usernames) unless you intentionally named a group with '_'.
-    """
     groups = []
     for room in sorted(group_names):
-        # Defensive: skip any room that looks like a private one-to-one room.
-        # This is optional if you allow underscores in real group names — remove if needed.
-
         members = chat_rooms.get(room, set())
         member_names = [connected_users[m]["name"] for m in members if m in connected_users]
         groups.append({"name": room, "members": member_names, "kind": "group"})
-
     payload = json.dumps({"type": "group_list", "groups": groups})
     for ws in list(connected_users.keys()):
-        try:
-            await ws.send_str(payload)
-        except Exception:
-            pass
+        try: await ws.send_str(payload)
+        except: pass
 
+async def broadcast(room, data):
+    remove = []
+    for ws in chat_rooms.get(room, []):
+        try: await ws.send_str(json.dumps(data))
+        except: remove.append(ws)
+    for ws in remove:
+        chat_rooms[room].discard(ws)
 
-
-
-# -----------------------
-# WebSocket Handler
-# -----------------------
 async def websocket_handler(request):
     ws = web.WebSocketResponse()
     await ws.prepare(request)
 
-    # รับ JSON จาก client: { "username": "...", "avatar": "..." }
     info = json.loads(await ws.receive_str())
     username = info["username"]
     avatar = info["avatar"]
 
-    # กันชื่อซ้ำ
     if username in [u["name"] for u in connected_users.values()]:
-        await ws.send_str(json.dumps({"type": "error", "message": "Username already exists"}))
+        await ws.send_str(json.dumps({"type":"error","message":"Username already exists"}))
         await ws.close()
         return ws
 
-    # เก็บข้อมูล user
-    connected_users[ws] = {"name": username, "avatar": avatar}
+    connected_users[ws] = {"name": username, "avatar": avatar, "anonymous_id": None}
     chat_rooms["global"].add(ws)
-
-    # อัพเดทรายชื่อ + ส่งข้อความ system
     await send_user_list()
     await send_group_list()
-    await broadcast("global", {
-        "type": "system",
-        "message": f"👋 {username} joined"
-    })
+    await broadcast("global", {"type":"system","message":f"👋 {username} joined"})
 
     try:
         async for msg in ws:
@@ -269,19 +241,14 @@ async def websocket_handler(request):
                     del chat_rooms[room]
                     group_names.discard(room)
                     await send_group_list()
-                    try:
-                        await ws.send_str(json.dumps({"type": "system", "message": f"✅ Group '{room}' deleted"}))
-                    except Exception:
-                        pass
-
-
-    except:
-        pass
+                    try: await ws.send_str(json.dumps({"type":"system","message":f"✅ Group '{room}' deleted"}))
+                    except: pass
 
     finally:
-        # ลบ user ออกจากระบบเมื่อหลุด
         user_info = connected_users.pop(ws, None)
-
+        if user_info and user_info.get("anonymous_id"):
+            release_anonymous_id(user_info["anonymous_id"])
+            anonymous_ids.pop(ws, None)
         for members in chat_rooms.values():
             members.discard(ws)
         # remove any stored messages owned by this ws
@@ -305,53 +272,17 @@ async def websocket_handler(request):
         for room in empty_groups:
             del chat_rooms[room]
             group_names.discard(room)
-
-        if empty_groups:
-            await send_group_list()
-
         if user_info:
             await send_user_list()
             await send_group_list()
-            await broadcast("global", {
-                "type": "system",
-                "message": f"❌ {user_info['name']} left"
-            })
-
+            await broadcast("global", {"type":"system","message":f"❌ {user_info['name']} left"})
     return ws
 
-# -----------------------
-# Broadcast
-# -----------------------
-async def broadcast(room, data):
-    remove = []
-    for ws in chat_rooms.get(room, []):
-        try:
-            await ws.send_str(json.dumps(data))
-        except:
-            remove.append(ws)
-
-    for ws in remove:
-        chat_rooms[room].discard(ws)
-
-# -----------------------
-# HTTP
-# -----------------------
-async def index(request):
-    return web.FileResponse("client.html")
-
-async def js_file(request):
-    return web.FileResponse("client.js")
+async def index(request): return web.FileResponse("client.html")
+async def js_file(request): return web.FileResponse("client.js")
 
 app = web.Application()
-
-# serve static files from ./images at URL path /images
 app.router.add_static("/images", path=os.path.join(os.path.dirname(__file__), "images"), show_index=False)
-
-# you can also serve client.html & client.js via static if you prefer:
-# app.router.add_static("/", path=os.path.join(os.path.dirname(__file__)), show_index=False)
-# but keep your existing explicit routes if you like
-
-
 app.router.add_get("/", index)
 app.router.add_get("/client.js", js_file)
 app.router.add_get("/ws", websocket_handler)
