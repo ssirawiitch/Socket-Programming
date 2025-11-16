@@ -324,7 +324,11 @@ function connect() {
   if (!avatar) return alert("Please select an avatar!");
 
   // Force localhost for testing
-  const socketURL = "ws://localhost:8080/ws";
+  const socketURL =
+    (location.protocol === "https:" ? "wss://" : "ws://") +
+    location.host +
+    "/ws";
+
   socket = new WebSocket(socketURL);
 
   socket.onopen = () => {
