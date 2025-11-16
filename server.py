@@ -97,14 +97,37 @@ async def websocket_handler(request):
                     # assign a stable id so messages can be unsent
                     msg_id = uuid.uuid4().hex
                     message_store[msg_id] = {"owner_ws": ws, "room": "global"}
+
+                    # ตรวจ anonymous จาก client
+                    is_anon = data.get("anonymous", False)
+
+                    if is_anon:
+                        # สร้าง anonymous id ถ้ายังไม่มี
+                        if "anon_id" not in connected_users[ws]:
+                            connected_users[ws]["anon_id"] = uuid.uuid4().hex[:4]  # 4 ตัว
+
+                        anon_name = f"Anonymous #{connected_users[ws]['anon_id']}"
+                        anon_avatar = "/images/ano.jpg"  
+
+                        sender_name = anon_name
+                        sender_avatar = anon_avatar
+
+                    else:
+                        # ชื่อจริง
+                        sender_name = name
+                        sender_avatar = avatar_url
+
                     await broadcast("global", {
                         "type": "chat",
                         "message_id": msg_id,
-                        "sender": name,
-                        "sender_avatar": avatar_url,
+                        "sender": sender_name,
+                        "sender_avatar": sender_avatar,
+                        "original_sender": name,
+                        "is_anonymous": is_anon,
                         "room": "global",
                         "message": text
                     })
+
 
                 # PRIVATE
                 elif msg_type == "private":
