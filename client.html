@@ -417,7 +417,15 @@
     <div id="chat-header">🌍 Global Chat</div>
     <div id="messages"></div>
     <div id="input-area">
-      <input id="message" placeholder="Type a message..." onkeydown="if(event.key==='Enter') sendMessage()">
+      <button id="anon-btn" onclick="toggleAnonymous()"
+        style="margin-right:10px; padding:8px 14px; background:#888; color:white;
+              border:none; border-radius:20px; cursor:pointer;">
+          Anonymous: OFF
+      </button>
+
+      <input id="message" placeholder="Type a message..."
+            onkeydown="if(event.key==='Enter') sendMessage()">
+
       <button id="send-btn" onclick="sendMessage()">Send</button>
     </div>
   </div>

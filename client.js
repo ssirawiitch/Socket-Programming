@@ -8,6 +8,22 @@ let avatar = "";
 let currentRoom = "global";           // active room id
 const roomContainers = {};           // map room -> DOM element containing messages
 
+let anonymousMode = false;
+
+function toggleAnonymous() {
+  anonymousMode = !anonymousMode;
+
+  const btn = document.getElementById("anon-btn");
+
+  if (anonymousMode) {
+    btn.textContent = "Anonymous: ON";
+    btn.style.background = "#e53935";  // สีแดงตอนเปิด
+  } else {
+    btn.textContent = "Anonymous: OFF";
+    btn.style.background = "#888";     // สีเทาตอนปิด
+  }
+}
+
 
 function openGlobal() {
   currentMode = "global";
@@ -550,7 +566,11 @@ function sendMessage() {
   const text = document.getElementById("message").value.trim();
   if (!text) return;
 
-  let payload = { type: currentMode, message: text };
+  let payload = { 
+    type: currentMode, 
+    message: text,
+    anonymous: anonymousMode   // ส่งสถานะ anonymous
+  };
 
   if (currentMode === "private") {
     if (!targetUser) return alert("Choose a user to chat privately with");
