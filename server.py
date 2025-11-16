@@ -1,9 +1,12 @@
 from aiohttp import web
 import json
 import os
+import uuid
 
 connected_users = {}
 chat_rooms = {"global": set()}   # room_name -> set of ws
+# map message_id -> metadata {"owner_ws": ws, "room": room}
+message_store = {}
 group_names = set(["global"])    # only rooms in this set are real groups shown to clients
 
 
@@ -91,8 +94,12 @@ async def websocket_handler(request):
 
                 # GLOBAL
                 if msg_type == "global":
+                    # assign a stable id so messages can be unsent
+                    msg_id = uuid.uuid4().hex
+                    message_store[msg_id] = {"owner_ws": ws, "room": "global"}
                     await broadcast("global", {
                         "type": "chat",
+                        "message_id": msg_id,
                         "sender": name,
                         "sender_avatar": avatar_url,
                         "room": "global",
@@ -109,8 +116,11 @@ async def websocket_handler(request):
                         if info_user["name"] in [name, target]:
                             chat_rooms[room].add(w)
 
+                    msg_id = uuid.uuid4().hex
+                    message_store[msg_id] = {"owner_ws": ws, "room": room}
                     await broadcast(room, {
                         "type": "chat",
+                        "message_id": msg_id,
                         "sender": name,
                         "sender_avatar": avatar_url,
                         "room": room,
@@ -136,13 +146,52 @@ async def websocket_handler(request):
                             pass
                         continue
 
+                    # assign id and store ownership like other message types
+                    msg_id = uuid.uuid4().hex
+                    message_store[msg_id] = {"owner_ws": ws, "room": room}
                     await broadcast(room, {
                         "type": "chat",
+                        "message_id": msg_id,
                         "sender": name,
                         "sender_avatar": avatar_url,
                         "room": room,
                         "message": text
                     })    
+
+                # UNSEND / DELETE message
+                elif msg_type == "delete":
+                    message_id = data.get("message_id")
+                    if not message_id:
+                        try:
+                            await ws.send_str(json.dumps({"type": "error", "message": "message_id required"}))
+                        except Exception:
+                            pass
+                        continue
+
+                    meta = message_store.get(message_id)
+                    if not meta:
+                        try:
+                            await ws.send_str(json.dumps({"type": "error", "message": "Message not found or already deleted"}))
+                        except Exception:
+                            pass
+                        continue
+
+                    # only original sender may delete
+                    if meta.get("owner_ws") != ws:
+                        try:
+                            await ws.send_str(json.dumps({"type": "error", "message": "You can only delete your own messages"}))
+                        except Exception:
+                            pass
+                        continue
+
+                    room = meta.get("room")
+                    # broadcast delete event to the room
+                    await broadcast(room, {"type": "delete", "room": room, "message_id": message_id})
+                    # remove from store
+                    try:
+                        del message_store[message_id]
+                    except KeyError:
+                        pass
 
                 # CREATE GROUP (R8)
                 elif msg_type == "create_group":
@@ -235,6 +284,14 @@ async def websocket_handler(request):
 
         for members in chat_rooms.values():
             members.discard(ws)
+        # remove any stored messages owned by this ws
+        for mid in list(message_store.keys()):
+            meta = message_store.get(mid)
+            if meta and meta.get("owner_ws") == ws:
+                try:
+                    del message_store[mid]
+                except KeyError:
+                    pass
         
         # After: for members in chat_rooms.values(): members.discard(ws)
 

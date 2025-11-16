@@ -264,6 +264,26 @@
     line-height: 1.4;
     word-wrap: break-word;
   }
+
+  /* make message a positioning context for the delete button */
+  .message { position: relative; }
+
+  /* delete (unsend) button styling */
+  .delete-btn {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    display: none; /* shown on hover */
+    font-size: 12px;
+    padding: 4px 8px;
+    border-radius: 10px;
+    border: none;
+    background: #ef9a9a;
+    cursor: pointer;
+  }
+
+  /* show delete btn on hover for user's own messages */
+  .message.mine:hover .delete-btn { display: inline-block; }
   .mine {
     align-self: flex-end;
     background: #dcf8c6;

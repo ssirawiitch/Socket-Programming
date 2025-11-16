@@ -124,15 +124,50 @@ function addChatToRoom(room, data) {
   const div = document.createElement("div");
   div.className = `message ${mine ? "mine" : "other"}`;
 
+  const messageId = data.message_id || "";
+
+  // top-level container id so delete events can find it
+  if (messageId) div.id = `msg-${messageId}`;
+
+  const avatarImg = `<img src="${escapeHtml(data.sender_avatar || '')}" style="width:40px; height:40px; border-radius:50%">`;
+
+  const who = `<b>${mine ? "You" : escapeHtml(data.sender)}</b>`;
+  const body = `<div>${escapeHtml(data.message)}</div>`;
+
+  // build inner HTML
   div.innerHTML = `
     <div style="display:flex; gap:10px; align-items:flex-start;">
-      <img src="${escapeHtml(data.sender_avatar || '')}" style="width:40px; height:40px; border-radius:50%">
-      <div>
-        <b>${mine ? "You" : escapeHtml(data.sender)}</b><br>
-        ${escapeHtml(data.message)}
+      ${avatarImg}
+      <div style="position:relative;">
+        ${who}<br>
+        ${body}
       </div>
     </div>
   `;
+
+  // if this message belongs to me, show a small delete (unsend) button
+  if (mine && messageId) {
+    const btn = document.createElement('button');
+    btn.textContent = 'Unsend';
+    btn.className = 'delete-btn';
+    btn.style.marginLeft = '8px';
+    btn.style.fontSize = '12px';
+    btn.style.padding = '4px 8px';
+    btn.style.borderRadius = '10px';
+    btn.style.border = 'none';
+    btn.style.background = '#ef9a9a';
+    btn.style.cursor = 'pointer';
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      if (!confirm('Delete this message for everyone?')) return;
+      socket.send(JSON.stringify({ type: 'delete', message_id: messageId }));
+    };
+
+    // place button inside the inner content div (the one with position:relative)
+    const contentDiv = div.querySelector('div div');
+    if (contentDiv) contentDiv.appendChild(btn);
+    else div.querySelector('div').appendChild(btn);
+  }
 
   container.appendChild(div);
   // auto-scroll only if this room is currently visible (user is looking at it)
@@ -290,8 +325,12 @@ function connect() {
     const data = JSON.parse(event.data);
 
     if (data.type === "error") {
+      // Only treat username-conflict as a fatal error that closes the socket.
+      // Other error messages are advisory (e.g., "You are not a member of group 'x'")
       alert(data.message);
-      socket.close();
+      if (typeof data.message === 'string' && data.message.includes('Username already exists')) {
+        socket.close();
+      }
       return;
     }
 
@@ -315,6 +354,17 @@ function connect() {
       // server includes `room` for every chat broadcast (global / private / group)
       const room = data.room || "global";
       addChatToRoom(room, data);
+      return;
+    }
+
+    if (data.type === "delete") {
+      const mid = data.message_id;
+      if (!mid) return;
+      const el = document.getElementById(`msg-${mid}`);
+      if (el) {
+        el.innerHTML = `<i style="color:gray">Message deleted</i>`;
+        el.classList.add('deleted');
+      }
       return;
     }
   };
