@@ -246,6 +246,94 @@
     color: white;
     padding: 15px;
     font-weight: bold;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  /* Anonymous Toggle */
+  #anonymous-toggle {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    position: relative;
+  }
+
+  .toggle-container {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .switch {
+    position: relative;
+    display: inline-block;
+    width: 50px;
+    height: 24px;
+  }
+
+  .switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+  }
+
+  .slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #ccc;
+    transition: 0.3s;
+    border-radius: 24px;
+  }
+
+  .slider:before {
+    position: absolute;
+    content: "";
+    height: 18px;
+    width: 18px;
+    left: 3px;
+    bottom: 3px;
+    background-color: white;
+    transition: 0.3s;
+    border-radius: 50%;
+  }
+
+  input:checked + .slider {
+    background-color: #00bfa5;
+  }
+
+  input:checked + .slider:before {
+    transform: translateX(26px);
+  }
+
+  #mode-label {
+    font-size: 14px;
+    font-weight: bold;
+    color: #666;
+    min-width: 100px;
+  }
+
+  .tooltip {
+    position: absolute;
+    bottom: -30px;
+    right: 0;
+    background: rgba(0, 0, 0, 0.8);
+    color: white;
+    padding: 5px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s;
+  }
+
+  #anonymous-toggle:hover .tooltip {
+    opacity: 1;
   }
 
   #messages {
@@ -394,7 +482,17 @@
 
   <!-- Chat area -->
   <div id="chat-area">
-    <div id="chat-header">🌍 Global Chat</div>
+    <div id="chat-header">
+      <span>🌍 Global Chat</span>
+      <div id="anonymous-toggle" class="toggle-container" style="display: none;">
+        <label class="switch">
+          <input type="checkbox" id="anonymous-checkbox" onchange="toggleAnonymous()">
+          <span class="slider"></span>
+        </label>
+        <span id="mode-label">👤 Normal</span>
+        <span class="tooltip">💡 Hide your identity in Global Chat</span>
+      </div>
+    </div>
     <div id="messages"></div>
     <div id="input-area">
       <input id="message" placeholder="Type a message..." onkeydown="if(event.key==='Enter') sendMessage()">
