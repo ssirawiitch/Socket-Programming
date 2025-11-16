@@ -1,24 +1,13 @@
 from aiohttp import web
-import json, os, random
+import json
+import os
+import uuid
 
 connected_users = {}
-chat_rooms = {"global": set()}
-group_names = set(["global"])
-anonymous_ids = {}
-used_anonymous_ids = set()
-
-def generate_anonymous_id():
-    for _ in range(100):
-        anon_id = random.randint(1000, 9999)
-        if anon_id not in used_anonymous_ids:
-            used_anonymous_ids.add(anon_id)
-            return anon_id
-    anon_id = random.randint(10000, 99999)
-    used_anonymous_ids.add(anon_id)
-    return anon_id
-
-def release_anonymous_id(anon_id):
-    if anon_id: used_anonymous_ids.discard(anon_id)
+chat_rooms = {"global": set()}   # room_name -> set of ws
+# map message_id -> metadata {"owner_ws": ws, "room": room}
+message_store = {}
+group_names = set(["global"])    # only rooms in this set are real groups shown to clients
 
 async def send_user_list():
     users = [{"name": info["name"], "avatar": info["avatar"]} for info in connected_users.values()]
@@ -67,92 +56,188 @@ async def websocket_handler(request):
 
     try:
         async for msg in ws:
-            if msg.type != web.WSMsgType.TEXT: continue
-            data = json.loads(msg.data)
-            msg_type = data.get("type")
-            text = data.get("message")
-            name = connected_users[ws]["name"]
-            avatar_url = connected_users[ws]["avatar"]
+            if msg.type == web.WSMsgType.TEXT:
+                data = json.loads(msg.data)
+                msg_type = data.get("type")
+                text = data.get("message")
 
-            # Global chat
-            if msg_type == "global":
-                is_anonymous = data.get("anonymous", False)
-                if is_anonymous:
-                    if connected_users[ws]["anonymous_id"] is None:
-                        anon_id = generate_anonymous_id()
-                        connected_users[ws]["anonymous_id"] = anon_id
-                        anonymous_ids[ws] = anon_id
-                    else: anon_id = connected_users[ws]["anonymous_id"]
-                    sender_name = f"Anonymous #{anon_id}"
-                    # Use a generic avatar for anonymous users (use avatar1 as placeholder)
-                    sender_avatar = "/images/avatar1.jpg"
-                else:
-                    sender_name = name
-                    sender_avatar = avatar_url
+                name = connected_users[ws]["name"]
+                avatar_url = connected_users[ws]["avatar"]
 
-                await broadcast("global", {
-                    "type":"chat","sender":sender_name,"sender_avatar":sender_avatar,
-                    "room":"global","message":text,"is_anonymous":is_anonymous,
-                    "original_sender": name
-                })
+                # GLOBAL
+                if msg_type == "global":
+                    # assign a stable id so messages can be unsent
+                    msg_id = uuid.uuid4().hex
+                    message_store[msg_id] = {"owner_ws": ws, "room": "global"}
+                    await broadcast("global", {
+                        "type": "chat",
+                        "message_id": msg_id,
+                        "sender": name,
+                        "sender_avatar": avatar_url,
+                        "room": "global",
+                        "message": text
+                    })
 
-            # Private
-            elif msg_type == "private":
-                target = data["target"]
-                room = "_".join(sorted([name, target]))
-                chat_rooms.setdefault(room, set())
-                for w, info_user in connected_users.items():
-                    if info_user["name"] in [name, target]:
-                        chat_rooms[room].add(w)
-                await broadcast(room, {"type":"chat","sender":name,"sender_avatar":avatar_url,"room":room,"message":text})
+                # PRIVATE
+                elif msg_type == "private":
+                    target = data["target"]
+                    room = "_".join(sorted([name, target]))
+                    chat_rooms.setdefault(room, set())
 
-            # Group
-            elif msg_type == "group":
-                room = data.get("room")
-                if not room: continue
-                members = chat_rooms.get(room, set())
-                if ws not in members:
-                    try: await ws.send_str(json.dumps({"type":"error","message":f"Join '{room}' first"}))
-                    except: pass
-                    continue
-                await broadcast(room, {"type":"chat","sender":name,"sender_avatar":avatar_url,"room":room,"message":text})
+                    for w, info_user in connected_users.items():
+                        if info_user["name"] in [name, target]:
+                            chat_rooms[room].add(w)
 
-            # Create group
-            elif msg_type == "create_group":
-                room = data.get("room")
-                if not room: continue
-                if room in chat_rooms: continue
-                if "_" in room: continue
-                chat_rooms[room] = set([ws])
-                group_names.add(room)
-                await send_group_list()
-                try: await ws.send_str(json.dumps({"type":"system","message":f"✅ Group '{room}' created"}))
-                except: pass
+                    msg_id = uuid.uuid4().hex
+                    message_store[msg_id] = {"owner_ws": ws, "room": room}
+                    await broadcast(room, {
+                        "type": "chat",
+                        "message_id": msg_id,
+                        "sender": name,
+                        "sender_avatar": avatar_url,
+                        "room": room,
+                        "message": text
+                    })
 
-            # Join group
-            elif msg_type == "join_group":
-                room = data.get("room")
-                if not room: continue
-                if room not in chat_rooms: continue
-                chat_rooms[room].add(ws)
-                await send_group_list()
-                try: await ws.send_str(json.dumps({"type":"system","message":f"✅ Joined '{room}'"}))
-                except: pass
+                # GROUP: sending a chat message to a group (must be member)
+                elif msg_type == "group":
+                    room = data.get("room")
+                    if not room:
+                        continue
 
-            # Leave group
-            elif msg_type == "leave_group":
-                room = data.get("room")
-                if not room: continue
-                chat_rooms.get(room,set()).discard(ws)
-                await send_group_list()
-                try: await ws.send_str(json.dumps({"type":"system","message":f"Left '{room}'"}))
-                except: pass
+                    #Ensure group exists and sender is one of the group member
+                    members = chat_rooms.get(room, set())
+                    if ws not in members:
+                        #notify sender that they must join first
+                        try:
+                            await ws.send_str(json.dumps({
+                                "type": "error",
+                                "message": f"You are not a member of group '{room}'. Join the group to send messages!"
+                            }))
+                        except Exception:
+                            pass
+                        continue
 
-            # Delete group
-            elif msg_type == "delete_group":
-                room = data.get("room")
-                if not room: continue
-                if room in chat_rooms:
+                    # assign id and store ownership like other message types
+                    msg_id = uuid.uuid4().hex
+                    message_store[msg_id] = {"owner_ws": ws, "room": room}
+                    await broadcast(room, {
+                        "type": "chat",
+                        "message_id": msg_id,
+                        "sender": name,
+                        "sender_avatar": avatar_url,
+                        "room": room,
+                        "message": text
+                    })    
+
+                # UNSEND / DELETE message
+                elif msg_type == "delete":
+                    message_id = data.get("message_id")
+                    if not message_id:
+                        try:
+                            await ws.send_str(json.dumps({"type": "error", "message": "message_id required"}))
+                        except Exception:
+                            pass
+                        continue
+
+                    meta = message_store.get(message_id)
+                    if not meta:
+                        try:
+                            await ws.send_str(json.dumps({"type": "error", "message": "Message not found or already deleted"}))
+                        except Exception:
+                            pass
+                        continue
+
+                    # only original sender may delete
+                    if meta.get("owner_ws") != ws:
+                        try:
+                            await ws.send_str(json.dumps({"type": "error", "message": "You can only delete your own messages"}))
+                        except Exception:
+                            pass
+                        continue
+
+                    room = meta.get("room")
+                    # broadcast delete event to the room
+                    await broadcast(room, {"type": "delete", "room": room, "message_id": message_id})
+                    # remove from store
+                    try:
+                        del message_store[message_id]
+                    except KeyError:
+                        pass
+
+                # CREATE GROUP (R8)
+                elif msg_type == "create_group":
+                    room = data.get("room")
+                    if not room:
+                        try:
+                            await ws.send_str(json.dumps({"type": "error", "message": "Group name is required"}))
+                        except Exception:
+                            pass
+                        continue
+
+                    if room in chat_rooms:
+                        try:
+                            await ws.send_str(json.dumps({"type": "error", "message": f"Group '{room}' already exists"}))
+                        except Exception:
+                            pass
+                        continue
+                    if "_" in room:
+                        try:
+                            await ws.send_str(json.dumps({"type": "error", "message": "Group name cannot contain underscore '_'"}))
+                        except Exception:
+                            pass
+                        continue
+
+                    # create group with creator as sole member
+                    chat_rooms[room] = set([ws])
+                    group_names.add(room)
+                    await send_group_list()
+                    try:
+                        await ws.send_str(json.dumps({"type": "system", "message": f"✅ Group '{room}' created"}))
+                    except Exception:
+                        pass
+
+                # JOIN GROUP (R10)
+                elif msg_type == "join_group":
+                    room = data.get("room")
+                    if not room:
+                        continue
+                    if room not in chat_rooms:
+                        try:
+                            await ws.send_str(json.dumps({"type": "error", "message": f"Group '{room}' does not exist"}))
+                        except Exception:
+                            pass
+                        continue
+
+                    chat_rooms[room].add(ws)
+                    await send_group_list()
+                    try:
+                        await ws.send_str(json.dumps({"type": "system", "message": f"✅ Joined group '{room}'"}))
+                    except Exception:
+                        pass
+
+                # optional: leave group
+                elif msg_type == "leave_group":
+                    room = data.get("room")
+                    if not room:
+                        continue
+                    if room in chat_rooms:
+                        chat_rooms[room].discard(ws)
+                        await send_group_list()
+                        try:
+                            await ws.send_str(json.dumps({"type": "system", "message": f"Left group '{room}'"}))
+                        except Exception:
+                            pass
+                # delete group
+                elif msg_type == "delete_group":
+                    room = data.get("room")
+                    if not room:
+                        try:
+                            await ws.send_str(json.dumps({"type": "error", "message": "No Group Selected"}))
+                        except Exception:
+                            pass
+                        continue
+                    #delete this group
                     del chat_rooms[room]
                     group_names.discard(room)
                     await send_group_list()
@@ -166,7 +251,24 @@ async def websocket_handler(request):
             anonymous_ids.pop(ws, None)
         for members in chat_rooms.values():
             members.discard(ws)
-        empty_groups = [room for room in chat_rooms if room in group_names and room != "global" and len(chat_rooms[room])==0]
+        # remove any stored messages owned by this ws
+        for mid in list(message_store.keys()):
+            meta = message_store.get(mid)
+            if meta and meta.get("owner_ws") == ws:
+                try:
+                    del message_store[mid]
+                except KeyError:
+                    pass
+        
+        # After: for members in chat_rooms.values(): members.discard(ws)
+
+        # Auto-delete any group that becomes empty
+        empty_groups = []
+        for room in list(chat_rooms.keys()):
+            if room in group_names and room != "global":
+                if len(chat_rooms[room]) == 0:
+                    empty_groups.append(room)
+
         for room in empty_groups:
             del chat_rooms[room]
             group_names.discard(room)
